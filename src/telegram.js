@@ -21,7 +21,27 @@ async function clickMenuItem(page, text) {
     return true;
 }
 
+async function ensureMainMenu(page) {
+    await openBotMenu(page);
+
+    const keyboard = page.locator('div.reply-keyboard.active');
+
+    const backToStart = keyboard.locator('text=В начало');
+
+    if (await backToStart.count() > 0) {
+        console.log('Обнаружено меню навигации, нажимаем "В начало"');
+        await backToStart.first().click();
+        await page.waitForTimeout(4000);
+
+        // после возврата меню нужно открыть заново
+        await openBotMenu(page);
+    }
+}
+
+
 module.exports = {
     openBotMenu,
     clickMenuItem,
+    ensureMainMenu,
 };
+
