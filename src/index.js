@@ -1,9 +1,11 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const config = require('./config');
-const { openBotMenu, clickMenuItem } = require('./telegram');
-const { openBotMenu, clickMenuItem, ensureMainMenu } = require('./telegram');
-
+const {
+    openBotMenu,
+    clickMenuItem,
+    ensureMainMenu
+} = require('./telegram');
 
 (async () => {
     const browser = await chromium.launch({ headless: false });
