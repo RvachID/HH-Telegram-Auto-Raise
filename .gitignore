@@ -1,0 +1,4 @@
+node_modules
+logs
+storageState.json
+running.lock
