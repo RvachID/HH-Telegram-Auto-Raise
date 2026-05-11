@@ -6,6 +6,7 @@ const {
     clickMenuItem,
     ensureMainMenu,
     waitForBotReply,
+    isSuspendedReply,
 } = require('./telegram');
 const { raiseResumeViaHH } = require('./hh');
 
@@ -21,72 +22,97 @@ const { raiseResumeViaHH } = require('./hh');
 
         const page = await context.newPage();
 
-        console.log('Открываем Telegram Web');
+        const runFallbackViaHH = async (reason) => {
+            console.warn(`${reason} Falling back to hh.ru.`);
+
+            const fallbackResult = await raiseResumeViaHH(context, config.HH);
+
+            if (!fallbackResult.success) {
+                console.warn(`Fallback via hh.ru failed: ${fallbackResult.reason || 'unknown'}`);
+                return false;
+            }
+
+            console.log('Fallback via hh.ru finished successfully.');
+            return true;
+        };
+
+        console.log('Opening Telegram Web');
         await page.goto(`https://web.telegram.org/k/#@${config.BOT_USERNAME}`);
 
-        // --- Первый логин ---
+        // First Telegram login flow.
         if (!hasSession && config.FIRST_LOGIN_WAIT) {
-            console.log('Ожидание первой авторизации в Telegram (2 минуты)');
+            console.log('Waiting for the initial Telegram login to complete');
             await page.waitForTimeout(config.TIMEOUTS.LOGIN_WAIT);
 
-            console.log('Сохраняем сессию Telegram');
+            console.log('Saving Telegram session');
             await page.context().storageState({ path: config.STORAGE_PATH });
 
-            console.log('Первая авторизация завершена, завершаем сценарий');
+            console.log('Initial login finished, stopping current run');
             return;
         }
 
-        // --- Основной сценарий ---
         await page.waitForTimeout(config.TIMEOUTS.PAGE_LOAD);
 
-        console.log('Проверяем, не находимся ли мы в режиме навигации');
-        await ensureMainMenu(page);
+        try {
+            console.log('Ensuring the bot is on the main menu');
+            await ensureMainMenu(page);
 
-        console.log('Открываем меню → Личный кабинет');
-        await openBotMenu(page);
-        await clickMenuItem(page, 'Личный кабинет');
-        await page.waitForTimeout(config.TIMEOUTS.AFTER_CABINET);
+            console.log('Opening menu -> Personal account');
+            await openBotMenu(page);
+            await clickMenuItem(page, 'Личный кабинет');
+            await page.waitForTimeout(config.TIMEOUTS.AFTER_CABINET);
 
-        console.log('Открываем меню → Поднять резюме в поиске');
-        await openBotMenu(page);
-        await clickMenuItem(page, 'Поднять резюме в поиске');
-        await page.waitForTimeout(config.TIMEOUTS.AFTER_RAISE);
+            console.log('Opening menu -> Raise resume');
+            await openBotMenu(page);
+            await clickMenuItem(page, 'Поднять резюме в поиске');
+            await page.waitForTimeout(config.TIMEOUTS.AFTER_RAISE);
 
-        console.log('Повторно открываем меню для проверки кнопки "Поднять"');
-        await openBotMenu(page);
+            console.log('Reopening menu to check the confirm button');
+            await openBotMenu(page);
 
-        const confirmed = await clickMenuItem(page, 'Поднять');
+            const confirmed = await clickMenuItem(page, 'Поднять');
 
-        if (confirmed) {
-            console.log('Кнопка "Поднять" найдена и нажата');
-            await page.waitForTimeout(config.TIMEOUTS.AFTER_CONFIRM);
+            if (confirmed) {
+                console.log('Confirm button was found and clicked');
+                await page.waitForTimeout(config.TIMEOUTS.AFTER_CONFIRM);
 
-            const reply = await waitForBotReply(page, config.TIMEOUTS.BOT_REPLY);
+                const reply = await waitForBotReply(page, config.TIMEOUTS.BOT_REPLY);
 
-            if (reply.received) {
-                const preview = reply.payload?.text ? ` (${reply.payload.text.slice(0, 80)})` : '';
-                console.log(`Ответ бота получен${preview}`);
+                if (reply.received) {
+                    const replyText = reply.payload?.text || '';
+                    const preview = replyText ? ` (${replyText.slice(0, 80)})` : '';
+                    console.log(`Bot reply received${preview}`);
+
+                    if (isSuspendedReply(replyText)) {
+                        await runFallbackViaHH('Bot returned "Sorry, operation has been temporarily suspended".');
+                    }
+                } else {
+                    await runFallbackViaHH('Bot reply did not arrive within the expected timeout.');
+                }
             } else {
-                console.warn('Ответ бота не пришёл за отведённое время, запускаем резервный сценарий через hh.ru');
+                console.log('Telegram confirm button is missing, switching to hh.ru directly');
                 const fallbackResult = await raiseResumeViaHH(context, config.HH);
 
                 if (!fallbackResult.success) {
-                    console.warn(`Резервное поднятие через hh.ru завершилось с ошибкой: ${fallbackResult.reason || 'неизвестно'}`);
+                    console.warn(`Direct hh.ru fallback failed: ${fallbackResult.reason || 'unknown'}`);
+                } else {
+                    console.log('Fallback via hh.ru finished successfully because Telegram did not show the confirm button.');
                 }
             }
-        } else {
-            console.log('Кнопки "Поднять" нет — либо уже поднято, либо не требуется');
+        } catch (telegramError) {
+            console.warn(`Telegram flow failed before completion: ${telegramError.message}`);
+            await runFallbackViaHH('Telegram UI automation failed.');
         }
 
-        console.log('Сценарий завершён');
+        console.log('Scenario finished');
 
         try {
             await context.storageState({ path: config.STORAGE_PATH });
         } catch (error) {
-            console.warn(`Не удалось обновить storageState: ${error.message}`);
+            console.warn(`Failed to refresh storageState: ${error.message}`);
         }
     } catch (error) {
-        console.error('Сценарий завершился с ошибкой:', error);
+        console.error('Scenario failed with an error:', error);
         process.exitCode = 1;
     } finally {
         await browser.close();

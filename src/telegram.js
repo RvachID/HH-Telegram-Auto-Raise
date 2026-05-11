@@ -1,9 +1,58 @@
-async function openBotMenu(page) {
-    const menuToggle = page.locator('button.toggle-reply-markup');
-    await menuToggle.first().waitFor({ timeout: 10000 });
-    await menuToggle.first().hover();
+async function getVisibleMenuToggle(page) {
+    const selectors = [
+        'button.toggle-reply-markup:visible',
+        'button.toggle-reply-markup.show:visible',
+        'button.toggle-reply-markup',
+    ];
 
+    for (const selector of selectors) {
+        const locator = page.locator(selector);
+        const count = await locator.count();
+
+        for (let index = 0; index < count; index += 1) {
+            const candidate = locator.nth(index);
+
+            if (await candidate.isVisible().catch(() => false)) {
+                return candidate;
+            }
+        }
+    }
+
+    return null;
+}
+
+async function openBotMenu(page) {
     const keyboard = page.locator('div.reply-keyboard.active');
+    const menuToggle = await getVisibleMenuToggle(page);
+
+    if (!menuToggle) {
+        throw new Error('telegram-menu-toggle-not-visible');
+    }
+
+    await menuToggle.scrollIntoViewIfNeeded().catch(() => {});
+
+    try {
+        await menuToggle.hover({ timeout: 5000 });
+        await keyboard.waitFor({ timeout: 3000 });
+        return keyboard;
+    } catch (hoverError) {
+        console.warn(`Failed to open Telegram menu by hover: ${hoverError.message}`);
+    }
+
+    try {
+        await menuToggle.click({ timeout: 5000 });
+        await keyboard.waitFor({ timeout: 3000 });
+        return keyboard;
+    } catch (clickError) {
+        console.warn(`Failed to open Telegram menu by click: ${clickError.message}`);
+    }
+
+    const messageInput = page.locator('[contenteditable="true"]').last();
+    if (await messageInput.isVisible().catch(() => false)) {
+        await messageInput.click({ timeout: 3000 }).catch(() => {});
+    }
+
+    await menuToggle.hover({ timeout: 5000 });
     await keyboard.waitFor({ timeout: 5000 });
 
     return keyboard;
@@ -25,15 +74,12 @@ async function ensureMainMenu(page) {
     await openBotMenu(page);
 
     const keyboard = page.locator('div.reply-keyboard.active');
-
     const backToStart = keyboard.locator('text=В начало');
 
     if (await backToStart.count() > 0) {
-        console.log('Обнаружено меню навигации, нажимаем "В начало"');
+        console.log('Navigation menu detected, returning to the bot main screen');
         await backToStart.first().click();
         await page.waitForTimeout(4000);
-
-        // после возврата меню нужно открыть заново
         await openBotMenu(page);
     }
 }
@@ -120,8 +166,8 @@ async function waitForBotReply(page, timeoutMs) {
                                 continue;
                             }
 
-                            for (let i = nodes.length - 1; i >= 0; i -= 1) {
-                                const incoming = isIncoming(nodes[i]);
+                            for (let index = nodes.length - 1; index >= 0; index -= 1) {
+                                const incoming = isIncoming(nodes[index]);
 
                                 if (incoming) {
                                     return incoming;
@@ -175,11 +221,23 @@ async function waitForBotReply(page, timeoutMs) {
     }
 }
 
+function isSuspendedReply(text) {
+    if (typeof text !== 'string') {
+        return false;
+    }
+
+    const normalized = text
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return normalized.includes('operation has been temporarily suspended');
+}
 
 module.exports = {
     openBotMenu,
     clickMenuItem,
     ensureMainMenu,
     waitForBotReply,
+    isSuspendedReply,
 };
-
